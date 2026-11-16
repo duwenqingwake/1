@@ -1,0 +1,61 @@
+name: Build Windows demo
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'requirements.txt'
+      - '演示数据/**'
+      - 'reports/**'
+      - '.github/workflows/windows-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Package desktop app
+        run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name QuantResearch --paths src src/面试演示.py
+      - name: Add examples and reports
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath '演示数据' -Destination 'dist/QuantResearch/演示数据' -Recurse
+          Copy-Item -LiteralPath 'reports' -Destination 'dist/QuantResearch/reports' -Recurse
+          Copy-Item -LiteralPath 'src' -Destination 'dist/QuantResearch/src' -Recurse
+          Copy-Item -LiteralPath '第三方许可' -Destination 'dist/QuantResearch/第三方许可' -Recurse
+          Copy-Item -LiteralPath '使用说明.md' -Destination 'dist/QuantResearch/使用说明.md'
+          Rename-Item -LiteralPath 'dist/QuantResearch/QuantResearch.exe' -NewName '量化研究工具.exe'
+      - name: Test executable startup
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath 'dist/QuantResearch/量化研究工具.exe' -ArgumentList '--self-test' -PassThru
+          if (-not $p.WaitForExit(60000)) { throw 'Startup self-test timed out' }
+          if ($p.ExitCode -ne 0) { throw "Exit code $($p.ExitCode)" }
+          if (-not (Test-Path -LiteralPath 'dist/QuantResearch/运行结果/启动自检.txt')) { throw 'Missing self-test result' }
+          Get-Content -LiteralPath 'dist/QuantResearch/运行结果/启动自检.txt'
+          $runtimePath = (Resolve-Path -LiteralPath 'dist/QuantResearch/运行结果').Path
+          $bundlePath = (Resolve-Path -LiteralPath 'dist/QuantResearch').Path
+          if (-not $runtimePath.StartsWith($bundlePath + [IO.Path]::DirectorySeparatorChar)) { throw 'Unexpected runtime directory' }
+          Remove-Item -LiteralPath $runtimePath -Recurse -Force
+      - name: Archive
+        shell: pwsh
+        run: Compress-Archive -LiteralPath 'dist/QuantResearch' -DestinationPath 'QuantResearch-Windows.zip'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QuantResearch-Windows
+          path: QuantResearch-Windows.zip
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $tag = 'demo-' + '${{ github.run_number }}'
+          gh release create $tag 'QuantResearch-Windows.zip' --target '${{ github.sha }}' --title '本地量化研究工具 Windows 演示版' --notes '完整解压后启动量化研究工具.exe。含止损8%研究报告和离线案例；在线回测需要BaoStock服务可用。历史研究模拟不代表实盘业绩。'
